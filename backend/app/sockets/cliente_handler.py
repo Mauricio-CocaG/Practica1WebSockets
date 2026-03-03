@@ -1,13 +1,10 @@
 """
 Manejador de clientes en hilos separados
-----------------------------------------
-Cada conexión de cliente se maneja en un hilo independiente.
-Procesa registro, métricas y comandos bidireccionales.
 """
 
 import threading
 import socket
-import time
+import json
 from datetime import datetime
 from app.sockets.protocolo import ProtocoloCluster
 from app.models.nodo import Nodo
@@ -21,39 +18,28 @@ class ClienteHandler(threading.Thread):
         self.client_socket = client_socket
         self.address = address
         self.app_context = app_context
-        self.socket_server = socket_server  # Referencia al servidor
+        self.socket_server = socket_server
         self.nodo_id = None
         self.nodo_nombre = None
         self.running = True
         self.daemon = True
         
     def run(self):
-        """Método principal del hilo"""
         print(f"[+] Nuevo cliente conectado: {self.address}")
-        
-        # Registrar o actualizar nodo en la BD
         self.registrar_nodo()
-        
-        # Enviar mensaje de bienvenida
         self.enviar_bienvenida()
         
         while self.running:
             try:
-                # Configurar timeout para no bloquear forever
                 self.client_socket.settimeout(5.0)
-                
-                # Recibir mensaje del cliente
                 mensaje = ProtocoloCluster.decode_message(self.client_socket)
                 
                 if not mensaje:
-                    # Timeout o conexión cerrada
                     continue
                 
-                # Procesar según el tipo
                 self.procesar_mensaje(mensaje)
                 
             except socket.timeout:
-                # Timeout normal, continuar
                 continue
             except (ConnectionResetError, BrokenPipeError):
                 print(f"[-] Cliente {self.address} desconectado abruptamente")
@@ -65,14 +51,11 @@ class ClienteHandler(threading.Thread):
         self.cerrar_conexion()
     
     def registrar_nodo(self):
-        """Registra el nodo en la base de datos"""
         with self.app_context:
             try:
-                # Buscar si el nodo ya existe por IP
                 nodo = Nodo.query.filter_by(ip_address=self.address[0]).first()
                 
                 if not nodo:
-                    # Crear nuevo nodo
                     count = Nodo.query.count() + 1
                     nombre = f"Regional {count}"
                     
@@ -86,15 +69,11 @@ class ClienteHandler(threading.Thread):
                     db.session.add(nodo)
                     db.session.commit()
                     print(f"[+] Nuevo nodo registrado: {nodo.nombre} (ID: {nodo.id})")
-                    
-                    # Registrar en el servidor para control de duplicados
                     self.socket_server.registrar_id_cliente(nodo.id, self)
                     
                 else:
-                    # Verificar si ya hay una conexión activa para este nodo
                     if nodo.id in self.socket_server.client_ids:
                         print(f"[!] Nodo {nodo.nombre} ya tiene una conexión activa")
-                        # Enviar mensaje de error y cerrar
                         self.enviar_mensaje({
                             'tipo': 'ERROR',
                             'mensaje': 'Ya existe una conexión activa para este nodo'
@@ -102,14 +81,11 @@ class ClienteHandler(threading.Thread):
                         self.running = False
                         return
                     
-                    # Actualizar nodo existente
                     nodo.estado = 'Activo'
                     nodo.ultima_conexion = datetime.utcnow()
                     nodo.puerto = self.address[1]
                     db.session.commit()
                     print(f"[+] Nodo reconectado: {nodo.nombre} (ID: {nodo.id})")
-                    
-                    # Registrar en el servidor
                     self.socket_server.registrar_id_cliente(nodo.id, self)
                 
                 self.nodo_id = nodo.id
@@ -120,7 +96,7 @@ class ClienteHandler(threading.Thread):
                 db.session.rollback()
     
     def enviar_bienvenida(self):
-        """Envía mensaje de bienvenida al cliente"""
+        """Envía mensaje de bienvenida y lo guarda en BD"""
         mensaje = {
             'tipo': 'BIENVENIDA',
             'nodo_id': self.nodo_id,
@@ -129,7 +105,7 @@ class ClienteHandler(threading.Thread):
         }
         self.enviar_mensaje(mensaje)
         
-        # Guardar en BD
+        # Guardar en base de datos
         with self.app_context:
             try:
                 msg_db = Mensaje(
@@ -137,15 +113,18 @@ class ClienteHandler(threading.Thread):
                     contenido=mensaje['mensaje'],
                     tipo='bienvenida',
                     direccion='enviado',
-                    requiere_ack=False
+                    requiere_ack=False,
+                    ack_recibido=False,
+                    fecha_creacion=datetime.utcnow()
                 )
                 db.session.add(msg_db)
                 db.session.commit()
-            except:
+                print(f"   📝 Mensaje de bienvenida guardado en BD (ID: {msg_db.id})")
+            except Exception as e:
+                print(f"   ❌ Error guardando mensaje: {e}")
                 db.session.rollback()
     
     def procesar_mensaje(self, mensaje):
-        """Procesa diferentes tipos de mensajes"""
         tipo = mensaje.get('tipo')
         
         with self.app_context:
@@ -156,33 +135,18 @@ class ClienteHandler(threading.Thread):
                     self.procesar_ack(mensaje)
                 elif tipo == 'REGISTRO':
                     self.procesar_registro(mensaje)
-                else:
-                    print(f"[?] Tipo de mensaje desconocido: {tipo}")
-                    # Responder con error
-                    self.enviar_mensaje({
-                        'tipo': 'ERROR',
-                        'mensaje': f'Tipo de mensaje no soportado: {tipo}'
-                    })
             except Exception as e:
                 print(f"[!] Error procesando mensaje: {e}")
                 db.session.rollback()
     
     def procesar_metrica(self, mensaje):
-        """Guarda las métricas recibidas en la BD con manejo de errores"""
         try:
             datos = mensaje.get('datos', {})
             
-            # Validar datos requeridos
             capacidad = datos.get('capacidad_total', 0)
             usado = datos.get('espacio_usado', 0)
+            porcentaje = (usado / capacidad * 100) if capacidad > 0 else 0
             
-            # Calcular porcentaje de uso
-            if capacidad > 0:
-                porcentaje = (usado / capacidad) * 100
-            else:
-                porcentaje = 0
-            
-            # Crear nueva métrica
             metrica = Metrica(
                 nodo_id=self.nodo_id,
                 nombre_disco=datos.get('nombre_disco', 'Desconocido'),
@@ -197,90 +161,93 @@ class ClienteHandler(threading.Thread):
             
             db.session.add(metrica)
             
-            # Actualizar última conexión del nodo
             nodo = Nodo.query.get(self.nodo_id)
             if nodo:
                 nodo.ultima_conexion = datetime.utcnow()
                 nodo.estado = 'Activo'
             
             db.session.commit()
-            print(f"[✓] Métricas guardadas para nodo {self.nodo_nombre} (ID: {self.nodo_id})")
+            print(f"[✓] Métricas guardadas para nodo {self.nodo_nombre}")
             
-            # Enviar confirmación
-            self.enviar_mensaje({
-                'tipo': 'METRICA_RECIBIDA',
-                'status': 'ok',
-                'timestamp': datetime.utcnow().isoformat()
-            })
+            self.enviar_mensaje({'tipo': 'METRICA_RECIBIDA', 'status': 'ok'})
             
         except Exception as e:
             print(f"[!] Error guardando métricas: {e}")
             db.session.rollback()
-            self.enviar_mensaje({
-                'tipo': 'ERROR',
-                'mensaje': f'Error guardando métricas: {str(e)}'
-            })
     
     def procesar_ack(self, mensaje):
-        """Procesa confirmación de mensajes"""
-        message_id = mensaje.get('message_id')
+        """Procesa ACK del cliente y actualiza la BD"""
+        message_id = mensaje.get('mensaje_id')
         print(f"[✓] ACK recibido de nodo {self.nodo_nombre} para mensaje {message_id}")
         
+        # Buscar el mensaje original y marcarlo como confirmado
         with self.app_context:
             try:
-                # Buscar mensaje por ID y marcar como confirmado
-                mensaje_db = Mensaje.query.filter_by(id=message_id).first()
-                if mensaje_db:
-                    mensaje_db.ack_recibido = True
-                    mensaje_db.fecha_ack = datetime.utcnow()
+                msg_original = Mensaje.query.filter_by(id=message_id).first()
+                if msg_original:
+                    msg_original.ack_recibido = True
+                    msg_original.fecha_ack = datetime.utcnow()
                     db.session.commit()
-                    print(f"   ✓ Mensaje {message_id} marcado como confirmado")
-            except:
+                    print(f"   ✅ Mensaje {message_id} marcado como confirmado en BD")
+                
+                # Guardar el ACK como mensaje recibido
+                msg_ack = Mensaje(
+                    nodo_id=self.nodo_id,
+                    contenido=json.dumps(mensaje),
+                    tipo='ack',
+                    direccion='recibido',
+                    requiere_ack=False,
+                    ack_recibido=False,
+                    fecha_creacion=datetime.utcnow()
+                )
+                db.session.add(msg_ack)
+                db.session.commit()
+                
+            except Exception as e:
+                print(f"   ❌ Error actualizando ACK: {e}")
                 db.session.rollback()
     
     def procesar_registro(self, mensaje):
-        """Procesa mensaje de registro inicial"""
-        nombre_cliente = mensaje.get('nombre', f'Cliente-{self.address[0]}')
+        nombre_cliente = mensaje.get('nombre', 'Desconocido')
         print(f"[+] Registro de nodo {self.nodo_nombre}: {nombre_cliente}")
         
-        # Actualizar nombre si se proporcionó
+        # Guardar registro como mensaje
         with self.app_context:
             try:
-                nodo = Nodo.query.get(self.nodo_id)
-                if nodo and mensaje.get('nombre'):
-                    nodo.nombre = mensaje['nombre']
-                    db.session.commit()
-                    self.nodo_nombre = nodo.nombre
+                msg = Mensaje(
+                    nodo_id=self.nodo_id,
+                    contenido=f"Registro: {nombre_cliente}",
+                    tipo='notificacion',
+                    direccion='recibido',
+                    requiere_ack=False,
+                    fecha_creacion=datetime.utcnow()
+                )
+                db.session.add(msg)
+                db.session.commit()
             except:
                 db.session.rollback()
-        
-        # Enviar confirmación
-        self.enviar_mensaje({
-            'tipo': 'REGISTRO_CONFIRMADO',
-            'nodo_id': self.nodo_id,
-            'mensaje': 'Registro exitoso',
-            'timestamp': datetime.utcnow().isoformat()
-        })
     
     def enviar_mensaje(self, mensaje):
-        """Envía un mensaje al cliente"""
         try:
             datos = ProtocoloCluster.encode_message(mensaje)
             if datos:
                 self.client_socket.send(datos)
                 return True
-        except (ConnectionResetError, BrokenPipeError):
-            print(f"[!] Conexión perdida con cliente {self.nodo_nombre}")
-            self.running = False
-        except Exception as e:
-            print(f"[!] Error enviando mensaje: {e}")
+        except:
+            return False
         return False
     
     def enviar_comando(self, comando, parametros=None):
-        """Envía un comando específico al cliente"""
-        mensaje = ProtocoloCluster.create_command_message(comando, parametros)
+        """Envía un comando al cliente y lo guarda en BD"""
+        mensaje = {
+            'tipo': 'COMANDO',
+            'comando': comando,
+            'parametros': parametros or {},
+            'requiere_ack': True,
+            'timestamp': datetime.utcnow().isoformat()
+        }
         
-        # Guardar en BD
+        # Guardar en BD antes de enviar
         with self.app_context:
             try:
                 msg_db = Mensaje(
@@ -288,21 +255,24 @@ class ClienteHandler(threading.Thread):
                     contenido=json.dumps(mensaje),
                     tipo='comando',
                     direccion='enviado',
-                    requiere_ack=True
+                    requiere_ack=True,
+                    ack_recibido=False,
+                    fecha_creacion=datetime.utcnow()
                 )
                 db.session.add(msg_db)
                 db.session.commit()
                 mensaje['id'] = msg_db.id  # Asignar ID para tracking
-            except:
+                print(f"   📝 Comando guardado en BD (ID: {msg_db.id})")
+            except Exception as e:
+                print(f"   ❌ Error guardando comando: {e}")
                 db.session.rollback()
+                mensaje['id'] = 0
         
         return self.enviar_mensaje(mensaje)
     
     def cerrar_conexion(self):
-        """Cierra la conexión y actualiza estado"""
-        print(f"[-] Cerrando conexión con {self.nodo_nombre} ({self.address})")
+        print(f"[-] Cerrando conexión con {self.nodo_nombre}")
         
-        # Eliminar del registro de IDs
         if self.nodo_id:
             self.socket_server.eliminar_id_cliente(self.nodo_id)
         
@@ -312,9 +282,19 @@ class ClienteHandler(threading.Thread):
                 if nodo:
                     nodo.estado = 'No Reporta'
                     db.session.commit()
-                    print(f"[!] Nodo {nodo.nombre} marcado como 'No Reporta'")
-            except Exception as e:
-                print(f"[!] Error actualizando estado: {e}")
+                    
+                    # Guardar evento de desconexión
+                    msg = Mensaje(
+                        nodo_id=self.nodo_id,
+                        contenido="Cliente desconectado - marcado como No Reporta",
+                        tipo='notificacion',
+                        direccion='enviado',
+                        requiere_ack=False,
+                        fecha_creacion=datetime.utcnow()
+                    )
+                    db.session.add(msg)
+                    db.session.commit()
+            except:
                 db.session.rollback()
         
         try:
