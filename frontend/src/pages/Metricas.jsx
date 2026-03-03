@@ -32,7 +32,7 @@ import {
 function Metricas() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [metricas, setMetricas] = useState([]);
+  const [metricas, setMetricas] = useState([]); // Inicializar como array vacío
   const [nodos, setNodos] = useState([]);
   const [nodoSeleccionado, setNodoSeleccionado] = useState('todos');
   const [dias, setDias] = useState(7);
@@ -48,9 +48,18 @@ function Metricas() {
   const cargarNodos = async () => {
     try {
       const response = await getNodos();
-      setNodos(response.data);
+      // Verificar la estructura de la respuesta
+      if (response.data && Array.isArray(response.data)) {
+        setNodos(response.data);
+      } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
+        setNodos(response.data.data);
+      } else {
+        console.warn('Formato de nodos inesperado:', response.data);
+        setNodos([]);
+      }
     } catch (err) {
       console.error('Error cargando nodos:', err);
+      setNodos([]);
     }
   };
 
@@ -59,11 +68,30 @@ function Metricas() {
     try {
       const nodoId = nodoSeleccionado === 'todos' ? null : nodoSeleccionado;
       const response = await getMetricas(nodoId, dias);
-      setMetricas(response.data);
+      
+      console.log('Respuesta de métricas:', response.data); // Debug
+      
+      // Manejar diferentes formatos de respuesta
+      let datosMetricas = [];
+      if (response.data && Array.isArray(response.data)) {
+        // Si es un array directamente
+        datosMetricas = response.data;
+      } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
+        // Si viene en { success: true, data: [...] }
+        datosMetricas = response.data.data;
+      } else if (response.data && response.data.metricas && Array.isArray(response.data.metricas)) {
+        // Si viene en { metricas: [...] }
+        datosMetricas = response.data.metricas;
+      } else {
+        console.warn('Formato de métricas inesperado:', response.data);
+      }
+      
+      setMetricas(datosMetricas);
       setError(null);
     } catch (err) {
       setError('Error al cargar métricas');
       console.error(err);
+      setMetricas([]); // Asegurar que sea array en caso de error
     } finally {
       setLoading(false);
     }
@@ -77,13 +105,15 @@ function Metricas() {
     );
   }
 
-  // Preparar datos para el gráfico
-  const datosGrafico = metricas.slice().reverse().map(m => ({
-    timestamp: new Date(m.timestamp).toLocaleDateString(),
-    usado: m.espacio_usado,
-    libre: m.espacio_libre,
-    porcentaje: m.porcentaje_uso
-  }));
+  // Preparar datos para el gráfico (solo si hay métricas)
+  const datosGrafico = Array.isArray(metricas) && metricas.length > 0 
+    ? metricas.slice().reverse().map(m => ({
+        timestamp: m.timestamp ? new Date(m.timestamp).toLocaleDateString() : 'Sin fecha',
+        usado: m.espacio_usado || 0,
+        libre: m.espacio_libre || 0,
+        porcentaje: m.porcentaje_uso || 0
+      }))
+    : [];
 
   return (
     <Box>
@@ -104,9 +134,9 @@ function Metricas() {
               onChange={(e) => setNodoSeleccionado(e.target.value)}
             >
               <MenuItem value="todos">Todos los nodos</MenuItem>
-              {nodos.map((nodo) => (
+              {Array.isArray(nodos) && nodos.map((nodo) => (
                 <MenuItem key={nodo.id} value={nodo.id}>
-                  {nodo.nombre}
+                  {nodo.nombre || `Nodo ${nodo.id}`}
                 </MenuItem>
               ))}
             </Select>
@@ -130,7 +160,7 @@ function Metricas() {
       </Grid>
 
       {/* Gráfico */}
-      {datosGrafico.length > 0 && (
+      {datosGrafico.length > 0 ? (
         <Paper sx={{ p: 2, mb: 3 }}>
           <Typography variant="h6" gutterBottom>
             Evolución del uso de disco
@@ -160,53 +190,67 @@ function Metricas() {
             </LineChart>
           </ResponsiveContainer>
         </Paper>
+      ) : (
+        <Paper sx={{ p: 4, mb: 3, textAlign: 'center' }}>
+          <Typography variant="body1" color="textSecondary">
+            No hay datos de métricas para mostrar
+          </Typography>
+        </Paper>
       )}
 
       {/* Tabla de métricas */}
-      <TableContainer component={Paper}>
-        <Table>
-          <TableHead>
-            <TableRow>
-              <TableCell>Fecha</TableCell>
-              <TableCell>Nodo</TableCell>
-              <TableCell>Disco</TableCell>
-              <TableCell>Tipo</TableCell>
-              <TableCell align="right">Capacidad</TableCell>
-              <TableCell align="right">Usado</TableCell>
-              <TableCell align="right">Libre</TableCell>
-              <TableCell align="right">% Uso</TableCell>
-              <TableCell align="right">IOPS</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {metricas.map((metrica) => (
-              <TableRow key={metrica.id}>
-                <TableCell>
-                  {new Date(metrica.timestamp).toLocaleString()}
-                </TableCell>
-                <TableCell>
-                  {nodos.find(n => n.id === metrica.nodo_id)?.nombre || `Nodo ${metrica.nodo_id}`}
-                </TableCell>
-                <TableCell>{metrica.nombre_disco}</TableCell>
-                <TableCell>{metrica.tipo_disco}</TableCell>
-                <TableCell align="right">{metrica.capacidad_total?.toFixed(1)} GB</TableCell>
-                <TableCell align="right">{metrica.espacio_usado?.toFixed(1)} GB</TableCell>
-                <TableCell align="right">{metrica.espacio_libre?.toFixed(1)} GB</TableCell>
-                <TableCell align="right">
-                  <Box sx={{ 
-                    color: metrica.porcentaje_uso > 85 ? 'error.main' : 
-                           metrica.porcentaje_uso > 70 ? 'warning.main' : 'success.main',
-                    fontWeight: 'bold'
-                  }}>
-                    {metrica.porcentaje_uso?.toFixed(1)}%
-                  </Box>
-                </TableCell>
-                <TableCell align="right">{metrica.iops}</TableCell>
+      {Array.isArray(metricas) && metricas.length > 0 ? (
+        <TableContainer component={Paper}>
+          <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>Fecha</TableCell>
+                <TableCell>Nodo</TableCell>
+                <TableCell>Disco</TableCell>
+                <TableCell>Tipo</TableCell>
+                <TableCell align="right">Capacidad</TableCell>
+                <TableCell align="right">Usado</TableCell>
+                <TableCell align="right">Libre</TableCell>
+                <TableCell align="right">% Uso</TableCell>
+                <TableCell align="right">IOPS</TableCell>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
+            </TableHead>
+            <TableBody>
+              {metricas.map((metrica) => (
+                <TableRow key={metrica.id}>
+                  <TableCell>
+                    {metrica.timestamp ? new Date(metrica.timestamp).toLocaleString() : 'N/A'}
+                  </TableCell>
+                  <TableCell>
+                    {nodos.find(n => n.id === metrica.nodo_id)?.nombre || `Nodo ${metrica.nodo_id}`}
+                  </TableCell>
+                  <TableCell>{metrica.nombre_disco || 'N/A'}</TableCell>
+                  <TableCell>{metrica.tipo_disco || 'N/A'}</TableCell>
+                  <TableCell align="right">{metrica.capacidad_total?.toFixed(1) || 0} GB</TableCell>
+                  <TableCell align="right">{metrica.espacio_usado?.toFixed(1) || 0} GB</TableCell>
+                  <TableCell align="right">{metrica.espacio_libre?.toFixed(1) || 0} GB</TableCell>
+                  <TableCell align="right">
+                    <Box sx={{ 
+                      color: metrica.porcentaje_uso > 85 ? 'error.main' : 
+                             metrica.porcentaje_uso > 70 ? 'warning.main' : 'success.main',
+                      fontWeight: 'bold'
+                    }}>
+                      {metrica.porcentaje_uso?.toFixed(1) || 0}%
+                    </Box>
+                  </TableCell>
+                  <TableCell align="right">{metrica.iops || 0}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      ) : (
+        <Paper sx={{ p: 4, textAlign: 'center' }}>
+          <Typography variant="body1" color="textSecondary">
+            No hay métricas disponibles para mostrar
+          </Typography>
+        </Paper>
+      )}
     </Box>
   );
 }
