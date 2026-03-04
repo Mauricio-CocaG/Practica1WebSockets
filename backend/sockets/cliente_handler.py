@@ -8,8 +8,9 @@ Procesa registro, métricas y comandos bidireccionales.
 import threading
 import socket
 import time
-from datetime import datetime
-from app.sockets.protocolo import ProtocoloCluster
+import json
+from sockets.protocolo import ProtocoloCluster
+from app.utils.timezone import now
 from app.models.nodo import Nodo
 from app.models.metrica import Metrica
 from app.models.mensaje import Mensaje
@@ -81,7 +82,7 @@ class ClienteHandler(threading.Thread):
                         ip_address=self.address[0],
                         puerto=self.address[1],
                         estado='Activo',
-                        ultima_conexion=datetime.utcnow()
+                        ultima_conexion=now()
                     )
                     db.session.add(nodo)
                     db.session.commit()
@@ -104,7 +105,7 @@ class ClienteHandler(threading.Thread):
                     
                     # Actualizar nodo existente
                     nodo.estado = 'Activo'
-                    nodo.ultima_conexion = datetime.utcnow()
+                    nodo.ultima_conexion = now()
                     nodo.puerto = self.address[1]
                     db.session.commit()
                     print(f"[+] Nodo reconectado: {nodo.nombre} (ID: {nodo.id})")
@@ -125,7 +126,7 @@ class ClienteHandler(threading.Thread):
             'tipo': 'BIENVENIDA',
             'nodo_id': self.nodo_id,
             'mensaje': f'Conectado al ClusterMonitor. Nodo ID: {self.nodo_id}',
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': now().isoformat()
         }
         self.enviar_mensaje(mensaje)
         
@@ -192,7 +193,7 @@ class ClienteHandler(threading.Thread):
                 espacio_libre=float(datos.get('espacio_libre', 0)),
                 iops=int(datos.get('iops', 0)),
                 porcentaje_uso=float(porcentaje),
-                timestamp=datetime.utcnow()
+                timestamp=now()
             )
             
             db.session.add(metrica)
@@ -200,17 +201,17 @@ class ClienteHandler(threading.Thread):
             # Actualizar última conexión del nodo
             nodo = Nodo.query.get(self.nodo_id)
             if nodo:
-                nodo.ultima_conexion = datetime.utcnow()
+                nodo.ultima_conexion = now()
                 nodo.estado = 'Activo'
             
             db.session.commit()
-            print(f"[✓] Métricas guardadas para nodo {self.nodo_nombre} (ID: {self.nodo_id})")
+            print(f"[OK] Metricas guardadas para nodo {self.nodo_nombre} (ID: {self.nodo_id})")
             
             # Enviar confirmación
             self.enviar_mensaje({
                 'tipo': 'METRICA_RECIBIDA',
                 'status': 'ok',
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': now().isoformat()
             })
             
         except Exception as e:
@@ -224,7 +225,7 @@ class ClienteHandler(threading.Thread):
     def procesar_ack(self, mensaje):
         """Procesa confirmación de mensajes"""
         message_id = mensaje.get('message_id')
-        print(f"[✓] ACK recibido de nodo {self.nodo_nombre} para mensaje {message_id}")
+        print(f"[OK] ACK recibido de nodo {self.nodo_nombre} para mensaje {message_id}")
         
         with self.app_context:
             try:
@@ -232,9 +233,9 @@ class ClienteHandler(threading.Thread):
                 mensaje_db = Mensaje.query.filter_by(id=message_id).first()
                 if mensaje_db:
                     mensaje_db.ack_recibido = True
-                    mensaje_db.fecha_ack = datetime.utcnow()
+                    mensaje_db.fecha_ack = now()
                     db.session.commit()
-                    print(f"   ✓ Mensaje {message_id} marcado como confirmado")
+                    print(f"   [OK] Mensaje {message_id} marcado como confirmado")
             except:
                 db.session.rollback()
     
@@ -259,7 +260,7 @@ class ClienteHandler(threading.Thread):
             'tipo': 'REGISTRO_CONFIRMADO',
             'nodo_id': self.nodo_id,
             'mensaje': 'Registro exitoso',
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': now().isoformat()
         })
     
     def enviar_mensaje(self, mensaje):

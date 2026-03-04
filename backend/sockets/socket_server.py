@@ -34,7 +34,7 @@ class SocketServer:
             local_ip = socket.gethostbyname(hostname)
             
             print(f"\n{'='*60}")
-            print(f"📡 SERVIDOR DE SOCKETS LISTO")
+            print(f"SERVIDOR DE SOCKETS LISTO")
             print(f"{'='*60}")
             print(f"   Escuchando en: {self.host}:{self.port}")
             print(f"   IP Local: {local_ip}")
@@ -54,7 +54,7 @@ class SocketServer:
                         continue
                     
                     # Crear handler para el cliente
-                    from app.sockets.cliente_handler import ClienteHandler
+                    from sockets.cliente_handler import ClienteHandler
                     handler = ClienteHandler(client_socket, address, self.app_context, self)
                     handler.start()
                     self.client_handlers.append(handler)

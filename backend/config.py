@@ -28,6 +28,9 @@ class Config:
     REPORT_TIMEOUT = int(os.getenv('REPORT_TIMEOUT', 30))
     NODE_TIMEOUT = int(os.getenv('NODE_TIMEOUT', 300))
 
+    # Zona horaria del sistema (Bolivia UTC-4)
+    TIMEZONE = os.getenv('TIMEZONE', 'America/La_Paz')
+
 class DevelopmentConfig(Config):
     DEBUG = True
 

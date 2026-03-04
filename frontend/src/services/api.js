@@ -1,10 +1,7 @@
 import axios from 'axios';
 
-// Usar la IP de tu servidor
-const SERVER_IP = '192.168.100.6';  // 👈 TU IP
-const API_URL = `http://${SERVER_IP}:3000/api`;
-
-console.log('📡 Conectando a API:', API_URL);
+// Usa el proxy de Vite (/api -> http://localhost:3000)
+const API_URL = '/api';
 
 const API = axios.create({
   baseURL: API_URL,

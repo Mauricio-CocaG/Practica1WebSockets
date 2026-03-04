@@ -1,7 +1,7 @@
 from flask import Blueprint, jsonify
 from app.services.cluster_service import ClusterService
 from app.services.nodo_service import NodoService
-from datetime import datetime
+from app.utils.timezone import now, to_iso
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -12,5 +12,5 @@ def get_resumen():
     return jsonify({
         'cluster': ClusterService.get_cluster_metrics(),
         'nodos': ClusterService.get_nodos_estado(),
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': to_iso(now())
     })

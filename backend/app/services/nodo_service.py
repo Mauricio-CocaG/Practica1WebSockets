@@ -1,6 +1,7 @@
 from app.models.nodo import Nodo
 from app import db
-from datetime import datetime, timedelta
+from datetime import timedelta
+from app.utils.timezone import now
 
 class NodoService:
     """Servicio para operaciones relacionadas con nodos"""
@@ -11,7 +12,7 @@ class NodoService:
         Verifica nodos que no han reportado en X minutos
         y los marca como 'No Reporta'
         """
-        tiempo_limite = datetime.utcnow() - timedelta(minutes=timeout_minutos)
+        tiempo_limite = now() - timedelta(minutes=timeout_minutos)
         
         # Buscar nodos activos que no han reportado
         nodos_inactivos = Nodo.query.filter(
@@ -45,7 +46,7 @@ class NodoService:
                 ip_address=ip_address,
                 puerto=puerto,
                 estado='Activo',
-                ultima_conexion=datetime.utcnow()
+                ultima_conexion=now()
             )
             db.session.add(nodo)
             db.session.commit()
@@ -54,7 +55,7 @@ class NodoService:
         else:
             # Actualizar nodo existente
             nodo.estado = 'Activo'
-            nodo.ultima_conexion = datetime.utcnow()
+            nodo.ultima_conexion = now()
             nodo.puerto = puerto
             db.session.commit()
             print(f"[+] Nodo actualizado: {nodo.nombre}")

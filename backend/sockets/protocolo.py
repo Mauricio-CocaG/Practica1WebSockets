@@ -20,7 +20,7 @@ class ProtocoloCluster:
             header = socket_connection.recv(4)
             if not header or len(header) < 4:
                 return None
-            
+
             length = struct.unpack('!I', header)[0]
             data = b''
             while len(data) < length:
@@ -28,8 +28,16 @@ class ProtocoloCluster:
                 if not chunk:
                     return None
                 data += chunk
-            
+
             return json.loads(data.decode('utf-8'))
         except Exception as e:
             print(f"Error decodificando: {e}")
             return None
+
+    @staticmethod
+    def create_command_message(comando, parametros=None):
+        return {
+            'tipo': 'COMANDO',
+            'comando': comando,
+            'parametros': parametros or {}
+        }

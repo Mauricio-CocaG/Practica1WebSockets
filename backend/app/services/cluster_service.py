@@ -2,7 +2,7 @@ from app.models.nodo import Nodo
 from app.models.metrica import Metrica
 from app import db
 from sqlalchemy import func
-from datetime import datetime
+from app.utils.timezone import to_iso
 
 class ClusterService:
     """Servicio para cálculos globales del cluster"""
@@ -72,7 +72,7 @@ class ClusterService:
                     'espacio_libre': ultima_metrica.espacio_libre,
                     'tipo_disco': ultima_metrica.tipo_disco,
                     'porcentaje_uso': ultima_metrica.porcentaje_uso,
-                    'ultima_actualizacion': ultima_metrica.timestamp.isoformat() if ultima_metrica.timestamp else None
+                    'ultima_actualizacion': to_iso(ultima_metrica.timestamp)
                 })
             else:
                 nodo_data.update({

@@ -8,7 +8,8 @@ from flask import Blueprint, jsonify, request
 from app.models.metrica import Metrica
 from app.models.nodo import Nodo
 from app import db
-from datetime import datetime, timedelta
+from datetime import timedelta
+from app.utils.timezone import now
 
 metrica_bp = Blueprint('metrica', __name__)
 
@@ -26,7 +27,7 @@ def get_metricas():
             query = query.filter_by(nodo_id=nodo_id)
         
         if dias:
-            fecha_limite = datetime.utcnow() - timedelta(days=dias)
+            fecha_limite = now() - timedelta(days=dias)
             query = query.filter(Metrica.timestamp >= fecha_limite)
         
         metricas = query.order_by(Metrica.timestamp.desc()).limit(limit).all()
@@ -85,12 +86,12 @@ def crear_metrica():
         db.session.add(metrica)
         
         # Actualizar última conexión del nodo
-        nodo.ultima_conexion = datetime.utcnow()
+        nodo.ultima_conexion = now()
         nodo.estado = 'Activo'
         
         db.session.commit()
         
-        print(f"[✓] Métrica guardada para nodo {nodo.nombre} (ID: {nodo.id})")
+        print(f"[OK] Metrica guardada para nodo {nodo.nombre} (ID: {nodo.id})")
         
         return jsonify({
             'success': True,

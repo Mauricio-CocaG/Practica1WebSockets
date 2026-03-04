@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Entornos virtuales
+venv/
+env/
+.venv/
+backend/venv/
+
+# Logs
+*.log
+cliente.log
+
+# Variables de entorno (contiene credenciales)
+# .env  <-- se mantiene rastreado en este proyecto
+
+# Base de datos local
+*.db
+*.sqlite3
+
+# Migraciones generadas (solo versiones, no la carpeta base)
+backend/migrations/versions/
+
+# IDE y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code
+.claude/
+
+# Node.js
+node_modules/
+frontend/dist/
+frontend/build/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini

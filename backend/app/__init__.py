@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_cors import CORS
 import os
+import logging
 import threading
 import sys
 from pathlib import Path
@@ -13,6 +14,26 @@ from config import config
 db = SQLAlchemy()
 migrate = Migrate()
 
+
+def _configurar_logging_bolivia():
+    """Configura el logging raiz con hora de Bolivia (UTC-4)."""
+    from app.utils.timezone import BoliviaFormatter
+    fmt = BoliviaFormatter(
+        '%(asctime)s [%(levelname)-8s] %(name)s: %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    # Reemplazar el formatter del handler de consola de Flask/Werkzeug
+    root = logging.getLogger()
+    for handler in root.handlers:
+        handler.setFormatter(fmt)
+    # Si no hay handlers aun, agregar uno
+    if not root.handlers:
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setFormatter(fmt)
+        root.addHandler(ch)
+    root.setLevel(logging.INFO)
+
+
 def create_app(config_name='default'):
     app = Flask(__name__)
     
@@ -20,7 +41,10 @@ def create_app(config_name='default'):
     CORS(app, origins="*", supports_credentials=True)
     
     app.config.from_object(config[config_name])
-    
+
+    # Aplicar logging con hora de Bolivia
+    _configurar_logging_bolivia()
+
     db.init_app(app)
     migrate.init_app(app, db)
     
@@ -62,7 +86,7 @@ def create_app(config_name='default'):
         })
     
     def start_socket_server():
-        from app.sockets.socket_server import SocketServer
+        from sockets.socket_server import SocketServer
         with app.app_context():
             socket_server = SocketServer(app.app_context())
             socket_server.start()
@@ -70,6 +94,6 @@ def create_app(config_name='default'):
     if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         socket_thread = threading.Thread(target=start_socket_server, daemon=True)
         socket_thread.start()
-        print(f"✅ Servidor de sockets iniciado en {app.config['SOCKET_HOST']}:{app.config['SOCKET_PORT']}")
+        print(f"[OK] Servidor de sockets iniciado en {app.config['SOCKET_HOST']}:{app.config['SOCKET_PORT']}")
     
     return app
