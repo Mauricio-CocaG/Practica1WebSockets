@@ -1,26 +1,28 @@
-import axios from 'axios';
+import axios from "axios";
 
-// Usar la IP de tu servidor
-const SERVER_IP = '192.168.100.6';  // 👈 TU IP
-const API_URL = `http://${SERVER_IP}:3000/api`;
+// ✅ URL desde .env de Vite
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:3000/api";
 
-console.log('📡 Conectando a API:', API_URL);
+console.log("📡 Conectando a API:", API_URL);
 
 const API = axios.create({
   baseURL: API_URL,
   timeout: 30000,
   headers: {
-    'Content-Type': 'application/json',
-  }
+    "Content-Type": "application/json",
+  },
 });
 
-// Interceptor para logging de respuestas (útil para debug)
+// Interceptor para logging de respuestas
 API.interceptors.response.use(
-  response => {
-    console.log(`✅ [${response.config.method.toUpperCase()}] ${response.config.url}:`, response.status);
+  (response) => {
+    console.log(
+      `✅ [${response.config.method.toUpperCase()}] ${response.config.url}:`,
+      response.status
+    );
     return response;
   },
-  error => {
+  (error) => {
     console.error(`❌ Error en ${error.config?.url}:`, error.message);
     return Promise.reject(error);
   }
@@ -28,75 +30,54 @@ API.interceptors.response.use(
 
 // Dashboard
 export const getDashboardResumen = async () => {
-  try {
-    const response = await API.get('/dashboard/resumen');
-    return response;
-  } catch (error) {
-    console.error('Error en getDashboardResumen:', error.message);
-    throw error;
-  }
+  const response = await API.get("/dashboard/resumen");
+  return response;
 };
 
 // Nodos
 export const getNodos = async () => {
-  try {
-    const response = await API.get('/nodos');
-    
-    // Normalizar respuesta para asegurar que siempre devolvemos un array
-    let nodosData = [];
-    if (response.data && Array.isArray(response.data)) {
-      nodosData = response.data;
-    } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
-      nodosData = response.data.data;
-    } else if (response.data && response.data.nodos && Array.isArray(response.data.nodos)) {
-      nodosData = response.data.nodos;
-    } else {
-      console.warn('Formato inesperado en getNodos:', response.data);
-      nodosData = [];
-    }
-    
-    return { ...response, data: nodosData };
-  } catch (error) {
-    console.error('Error en getNodos:', error.message);
-    throw error;
+  const response = await API.get("/nodos");
+
+  let nodosData = [];
+  if (Array.isArray(response.data)) {
+    nodosData = response.data;
+  } else if (response.data?.data && Array.isArray(response.data.data)) {
+    nodosData = response.data.data;
+  } else if (response.data?.nodos && Array.isArray(response.data.nodos)) {
+    nodosData = response.data.nodos;
+  } else {
+    console.warn("Formato inesperado en getNodos:", response.data);
   }
+
+  return { ...response, data: nodosData };
 };
 
-// Métricas - VERSIÓN MEJORADA
+// Métricas
 export const getMetricas = async (nodoId = null, dias = 7) => {
   try {
-    let url = '/metricas';
+    let url = "/metricas";
     const params = new URLSearchParams();
-    if (nodoId) params.append('nodo_id', nodoId);
-    if (dias) params.append('dias', dias);
+    if (nodoId) params.append("nodo_id", nodoId);
+    if (dias) params.append("dias", dias);
     if (params.toString()) url += `?${params.toString()}`;
-    
+
     const response = await API.get(url);
-    
-    // NORMALIZAR LA RESPUESTA PARA GARANTIZAR QUE SIEMPRE SEA UN ARRAY
+
     let metricasData = [];
-    
-    // Log para debug
-    console.log('📊 Respuesta de métricas (raw):', response.data);
-    
-    if (response.data && Array.isArray(response.data)) {
-      // Caso 1: Respuesta es un array directamente
+    console.log("📊 Respuesta de métricas (raw):", response.data);
+
+    if (Array.isArray(response.data)) {
       metricasData = response.data;
-    } else if (response.data && response.data.data && Array.isArray(response.data.data)) {
-      // Caso 2: Respuesta es { data: [...] }
+    } else if (Array.isArray(response.data?.data)) {
       metricasData = response.data.data;
-    } else if (response.data && response.data.metricas && Array.isArray(response.data.metricas)) {
-      // Caso 3: Respuesta es { metricas: [...] }
+    } else if (Array.isArray(response.data?.metricas)) {
       metricasData = response.data.metricas;
-    } else if (response.data && response.data.results && Array.isArray(response.data.results)) {
-      // Caso 4: Respuesta es { results: [...] }
+    } else if (Array.isArray(response.data?.results)) {
       metricasData = response.data.results;
     } else {
-      console.warn('⚠ Formato inesperado en getMetricas:', response.data);
-      // Intentar extraer algo si es un objeto
-      if (response.data && typeof response.data === 'object') {
-        // Buscar cualquier propiedad que sea array
-        for (let key in response.data) {
+      console.warn("⚠ Formato inesperado en getMetricas:", response.data);
+      if (response.data && typeof response.data === "object") {
+        for (const key in response.data) {
           if (Array.isArray(response.data[key])) {
             metricasData = response.data[key];
             console.log(`✅ Usando propiedad '${key}' como array de métricas`);
@@ -105,24 +86,20 @@ export const getMetricas = async (nodoId = null, dias = 7) => {
         }
       }
     }
-    
+
     console.log(`📊 Métricas procesadas: ${metricasData.length} registros`);
-    
-    // Devolver la respuesta con la data normalizada
-    return { 
-      ...response, 
+
+    return {
+      ...response,
       data: metricasData,
-      originalData: response.data // Opcional: mantener original por si acaso
+      originalData: response.data,
     };
-    
   } catch (error) {
-    console.error('❌ Error en getMetricas:', error.message);
-    // En caso de error, devolver un array vacío en lugar de propagar el error
-    // (esto evita que la UI se rompa)
-    return { 
-      data: [], 
+    console.error("❌ Error en getMetricas:", error.message);
+    return {
+      data: [],
       status: error.response?.status || 500,
-      error: error.message 
+      error: error.message,
     };
   }
 };

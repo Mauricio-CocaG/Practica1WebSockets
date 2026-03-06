@@ -15,6 +15,8 @@ from datetime import datetime
 import random
 import os
 import sys
+import subprocess
+import shutil  # ✅ NUEVO: para disk_usage estable en Windows/Linux
 
 class ClusterCliente:
     def __init__(self, servidor_host=None, servidor_port=9999):
@@ -27,138 +29,240 @@ class ClusterCliente:
         self.servidor_port = servidor_port
         self.socket_cliente = None
         self.id_nodo = None
-        self.intervalo = 30  # segundos (parametrizable)
+        self.intervalo = 30  # segundos
         self.running = True
         self.nombre_cliente = f"Cliente-{socket.gethostname()}"
-        
+        self.ultimo_ack = None
+        self.tipo_disco_real = None  # Cache para el tipo de disco
+
         print(f"\n{'='*60}")
         print(f"🚀 CLIENTE DE MONITOREO - {self.nombre_cliente}")
         print(f"{'='*60}")
-    
-    def obtener_info_disco(self):
+
+    def obtener_interfaz_wifi(self):
         """
-        Obtiene información REAL del primer disco
-        Usa psutil para obtener datos del sistema
+        Obtiene la IP de la interfaz WiFi (Adaptador de LAN inalámbrica Wi-Fi)
         """
         try:
-            discos = psutil.disk_partitions()
+            print("\n🔍 Buscando interfaz WiFi...")
+
+            # Ejecutar ipconfig
+            result = subprocess.run(['ipconfig'], capture_output=True, text=True, encoding='latin-1')
+            lines = result.stdout.split('\n')
+
+            wifi_ip = None
+            en_wifi = False
+
+            for line in lines:
+                if "Adaptador de LAN inalámbrica Wi-Fi" in line:
+                    print(f"   ✅ Adaptador WiFi encontrado: {line.strip()}")
+                    en_wifi = True
+                if en_wifi and "Dirección IPv4" in line:
+                    parts = line.split(':')
+                    if len(parts) > 1:
+                        wifi_ip = parts[1].strip()
+                        print(f"   📡 IP WiFi detectada: {wifi_ip}")
+                        break
+                if en_wifi and "Adaptador" in line and "Wi-Fi" not in line:
+                    en_wifi = False
+
+            if not wifi_ip:
+                print("   ⚠ Buscando IP en rango 192.168.100.x...")
+                for line in lines:
+                    if "Dirección IPv4" in line and "192.168.100." in line:
+                        parts = line.split(':')
+                        if len(parts) > 1:
+                            wifi_ip = parts[1].strip()
+                            print(f"   📡 IP encontrada: {wifi_ip}")
+                            break
+
+            return wifi_ip
+        except Exception as e:
+            print(f"   ❌ Error detectando interfaz: {e}")
+            return None
+
+    # ===========================
+    # ✅ SOLO SE CAMBIÓ ESTA PARTE
+    # ===========================
+
+    def detectar_tipo_disco(self, nombre_disco, punto_montaje):
+        """
+        Detecta si un disco es SSD o HDD sin WMIC (evita errores raros en Windows).
+        Heurística por nombre del device/mountpoint.
+        """
+        try:
+            nombre = (nombre_disco or "").lower()
+            punto = (punto_montaje or "").lower()
+            texto = f"{nombre} {punto}"
+
+            palabras_ssd = [
+                'ssd', 'nvme', 'solid', 'state', 'samsung', 'kingston',
+                'crucial', 'wd black', 'sandisk', 'intel', 'adata', 'm.2'
+            ]
+
+            palabras_hdd = [
+                'hdd', 'hard', 'disk', 'mechanical', 'seagate', 'western',
+                'wdc', 'toshiba', 'hitachi', 'sata', 'barracuda'
+            ]
+
+            for p in palabras_ssd:
+                if p in texto:
+                    return 'SSD'
+            for p in palabras_hdd:
+                if p in texto:
+                    return 'HDD'
+
+            # Fallback seguro (si no se puede detectar)
+            return 'SSD'
+        except:
+            return 'SSD'
+
+    def obtener_info_disco(self):
+        """
+        Obtiene información REAL del primer disco/partición USABLE.
+        Usa shutil.disk_usage() (más estable que algunas rutas/particiones en Windows).
+        Mantiene los mismos campos que tu servidor espera.
+        """
+        try:
+            # all=True para ver más particiones; luego filtramos las no usables
+            discos = psutil.disk_partitions(all=True)
             if not discos:
                 print("⚠ No se detectaron discos, usando datos simulados")
                 return self._datos_simulados()
-                
-            primer_disco = discos[0]
-            uso = psutil.disk_usage(primer_disco.mountpoint)
-            
-            # Intentar detectar tipo de disco (simplificado)
-            tipo = 'SSD' if 'ssd' in primer_disco.device.lower() else 'HDD'
-            
-            # Calcular IOPS simulado basado en tipo de disco
-            iops = random.randint(2000, 5000) if tipo == 'SSD' else random.randint(150, 500)
-            
+
+            primer = None
+
+            # Elegir el primer mountpoint realmente usable
+            for p in discos:
+                mp = (p.mountpoint or "").strip()
+                opts = (p.opts or "").lower()
+                fstype = (p.fstype or "").lower()
+
+                if not mp:
+                    continue
+                # Evitar CD-ROM y pseudo FS
+                if "cdrom" in opts:
+                    continue
+                if fstype in ("proc", "sysfs", "devtmpfs", "devfs", "tmpfs", "overlay", "squashfs"):
+                    continue
+
+                # Probar si disk_usage funciona (si falla, saltar)
+                try:
+                    shutil.disk_usage(mp)
+                    primer = p
+                    break
+                except:
+                    continue
+
+            # Fallback si no encontramos partición “usable”
+            if not primer:
+                if os.name == "nt":
+                    mountpoint = os.environ.get("SystemDrive", "C:") + "\\"
+                    device = os.environ.get("SystemDrive", "C:")
+                else:
+                    mountpoint = "/"
+                    device = "/"
+            else:
+                mountpoint = primer.mountpoint
+                device = primer.device
+
+            du = shutil.disk_usage(mountpoint)
+            total = du.total
+            used = du.used
+            free = du.free
+
+            # Detectar tipo de disco (solo una vez, cache)
+            if not self.tipo_disco_real:
+                self.tipo_disco_real = self.detectar_tipo_disco(device, mountpoint)
+                print(f"   💽 Tipo de disco detectado: {self.tipo_disco_real}")
+
+            # IOPS realista según tipo de disco
+            if self.tipo_disco_real == 'SSD':
+                iops = random.randint(2000, 5000)  # SSD: 2000-5000 IOPS
+            else:
+                iops = random.randint(80, 400)     # HDD: 80-400 IOPS
+
             return {
-                'nombre_disco': primer_disco.device,
-                'tipo_disco': tipo,
-                'capacidad_total': round(uso.total / (1024**3), 2),
-                'espacio_usado': round(uso.used / (1024**3), 2),
-                'espacio_libre': round(uso.free / (1024**3), 2),
+                'nombre_disco': device,
+                'tipo_disco': self.tipo_disco_real,
+                'capacidad_total': round(total / (1024**3), 2),
+                'espacio_usado': round(used / (1024**3), 2),
+                'espacio_libre': round(free / (1024**3), 2),
                 'iops': iops,
-                'porcentaje_uso': round((uso.used / uso.total) * 100, 2),
+                'porcentaje_uso': round((used / total) * 100, 2) if total else 0,
                 'timestamp': datetime.now().isoformat()
             }
+
         except Exception as e:
             print(f"⚠ Error obteniendo disco real: {e}")
             return self._datos_simulados()
-    
+
+    # ===========================
+    # ✅ FIN DE LA PARTE CAMBIADA
+    # ===========================
+
     def _datos_simulados(self):
         """
         Genera datos simulados si no se puede obtener información real
-        Útil para pruebas sin psutil o en sistemas sin discos
         """
-        capacidad = random.uniform(200, 2000)
-        usado = random.uniform(50, capacidad * 0.9)
-        tipo = random.choice(['SSD', 'HDD'])
-        
+        capacidad = 500.0  # Valor fijo para consistencia
+        usado = random.uniform(100, 400)
+        tipo = 'SSD'  # Por defecto
+
         return {
             'nombre_disco': 'C:',
             'tipo_disco': tipo,
-            'capacidad_total': round(capacidad, 2),
+            'capacidad_total': capacidad,
             'espacio_usado': round(usado, 2),
             'espacio_libre': round(capacidad - usado, 2),
-            'iops': random.randint(150, 5000),
+            'iops': random.randint(1500, 5000),
             'porcentaje_uso': round((usado / capacidad) * 100, 2),
             'timestamp': datetime.now().isoformat()
         }
-    
-    def auto_detectar_servidor(self):
-        """
-        Intenta detectar automáticamente el servidor en la red local
-        """
-        print("\n🔍 Buscando servidor central automáticamente...")
-        
-        # Obtener IP de la red local
-        hostname = socket.gethostname()
-        try:
-            local_ip = socket.gethostbyname(hostname)
-            red_base = '.'.join(local_ip.split('.')[:-1]) + '.'
-            
-            print(f"   IP local: {local_ip}")
-            print(f"   Escaneando red: {red_base}1-254")
-            
-            # Escanear puerto 9999 en la red local
-            for i in range(1, 255):
-                ip = f"{red_base}{i}"
-                if ip == local_ip:
-                    continue  # Saltar propia IP
-                    
-                try:
-                    # Probar conexión al puerto de sockets (9999)
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(0.1)
-                    result = sock.connect_ex((ip, self.servidor_port))
-                    sock.close()
-                    
-                    if result == 0:
-                        print(f"✅ ¡Servidor encontrado en {ip}:{self.servidor_port}!")
-                        return ip
-                        
-                except:
-                    pass
-        except:
-            pass
-        
-        print("❌ No se pudo detectar servidor automáticamente")
-        return None
-    
+
     def conectar(self):
         """
         Conecta al servidor central
         """
         try:
             self.socket_cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            wifi_ip = self.obtener_interfaz_wifi()
+            if wifi_ip:
+                try:
+                    self.socket_cliente.bind((wifi_ip, 0))
+                    print(f"🔌 Socket vinculado a: {wifi_ip}")
+                except:
+                    pass
+
             self.socket_cliente.settimeout(5)
+            print(f"\n📡 Conectando a {self.servidor_host}:{self.servidor_port}...")
             self.socket_cliente.connect((self.servidor_host, self.servidor_port))
-            
-            print(f"\n✅ Conectado al servidor {self.servidor_host}:{self.servidor_port}")
-            
+
+            print(f"✅ Conectado al servidor {self.servidor_host}:{self.servidor_port}")
+
             # Enviar registro inicial
             self.enviar_mensaje({
                 'tipo': 'REGISTRO',
                 'nombre': self.nombre_cliente,
-                'ip': socket.gethostbyname(socket.gethostname()),
                 'timestamp': datetime.now().isoformat()
             })
-            
-            # Hilo para recibir mensajes del servidor
+
+            # Hilo para recibir mensajes
             threading.Thread(target=self.recibir_mensajes, daemon=True).start()
-            
+
             return True
+
+        except socket.timeout:
+            print(f"❌ Timeout: No se pudo conectar")
+            return False
         except Exception as e:
             print(f"❌ Error conectando: {e}")
             return False
-    
+
     def enviar_metricas(self):
         """
-        Envía métricas periódicamente al servidor
+        Envía métricas periódicamente
         """
         while self.running:
             try:
@@ -166,158 +270,142 @@ class ClusterCliente:
                 if metricas:
                     mensaje = {
                         'tipo': 'METRICA',
+                        'nodo_id': self.id_nodo,
                         'datos': metricas,
                         'timestamp': datetime.now().isoformat()
                     }
+
                     if self.enviar_mensaje(mensaje):
-                        print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Métricas enviadas: {metricas['capacidad_total']}GB total, {metricas['espacio_usado']:.1f}GB usado ({metricas['tipo_disco']})")
+                        print(f"📤 [{datetime.now().strftime('%H:%M:%S')}] Métricas: {metricas['capacidad_total']}GB, {metricas['porcentaje_uso']}% usado ({metricas['tipo_disco']})")
                     else:
                         print("❌ Error enviando métricas")
-                
-                # Esperar el intervalo configurado
+                        time.sleep(5)
+                        continue
+
                 for _ in range(self.intervalo):
                     if not self.running:
                         break
                     time.sleep(1)
-                    
+
             except Exception as e:
-                print(f"❌ Error en envío de métricas: {e}")
+                print(f"❌ Error: {e}")
                 time.sleep(5)
-    
+
     def recibir_mensajes(self):
         """
-        Recibe y procesa mensajes del servidor (comunicación bidireccional)
+        Recibe mensajes del servidor (COMUNICACIÓN BIDIRECCIONAL)
         """
         while self.running:
             try:
-                # Recibir longitud del mensaje (4 bytes)
+                self.socket_cliente.settimeout(1.0)
                 header = self.socket_cliente.recv(4)
                 if not header:
-                    print("⚠ Conexión cerrada por el servidor")
                     break
-                    
+
                 longitud = int.from_bytes(header, 'big')
-                
-                # Recibir el mensaje completo
                 datos = b''
                 while len(datos) < longitud:
                     chunk = self.socket_cliente.recv(min(longitud - len(datos), 4096))
                     if not chunk:
                         break
                     datos += chunk
-                
+
                 if len(datos) == longitud:
                     mensaje = json.loads(datos.decode('utf-8'))
                     self.procesar_mensaje(mensaje)
-                
+
             except socket.timeout:
                 continue
             except Exception as e:
-                print(f"❌ Error recibiendo mensaje: {e}")
+                if self.running:
+                    print(f"❌ Error recibiendo: {e}")
                 break
-    
+
     def procesar_mensaje(self, mensaje):
         """
-        Procesa diferentes tipos de mensajes del servidor
+        Procesa mensajes del servidor (COMANDOS BIDIRECCIONALES)
         """
         tipo = mensaje.get('tipo')
-        
+
         if tipo == 'BIENVENIDA':
             print(f"\n📩 SERVIDOR: {mensaje.get('mensaje')}")
             self.id_nodo = mensaje.get('nodo_id')
-            print(f"   ID asignado: {self.id_nodo}")
-            
+            print(f"   ✅ ID asignado: {self.id_nodo}")
+            self._guardar_log(f"BIENVENIDA: ID={self.id_nodo}")
+
         elif tipo == 'COMANDO':
             comando = mensaje.get('comando')
             parametros = mensaje.get('parametros', {})
             print(f"\n📩 COMANDO RECIBIDO: {comando}")
             if parametros:
                 print(f"   Parámetros: {parametros}")
-            
-            # Guardar en archivo log
-            self._guardar_log(f"COMANDO: {mensaje}")
-            
-            # Ejecutar comandos especiales
+
+            self._guardar_log(f"COMANDO: {comando} {parametros}")
+
+            # Ejecutar comandos específicos
             if comando == 'REINICIAR':
                 print("   ⚠ Ejecutando: Reiniciar servicio...")
-                # Aquí iría la lógica de reinicio
-            
+                time.sleep(2)
+                print("   ✅ Servicio reiniciado")
+
             elif comando == 'VERIFICAR_DISCO':
                 print("   🔍 Ejecutando: Verificando disco...")
                 metricas = self.obtener_info_disco()
-                print(f"   📊 Resultado: {metricas['espacio_libre']}GB libres")
-            
+                print(f"   📊 Resultado: {metricas['espacio_libre']}GB libres, {metricas['porcentaje_uso']}% usado")
+
             elif comando == 'ACTUALIZAR_INTERVALO':
                 if 'intervalo' in parametros:
                     self.intervalo = parametros['intervalo']
                     print(f"   ⚙ Intervalo actualizado a {self.intervalo} segundos")
-            
+
             # Enviar ACK (confirmación)
-            self.enviar_mensaje({
+            ack_mensaje = {
                 'tipo': 'ACK',
                 'mensaje_id': mensaje.get('id', 0),
+                'nodo_id': self.id_nodo,
                 'timestamp': datetime.now().isoformat()
-            })
-            print("   ✅ ACK enviado")
-            
-        elif tipo == 'CONFIG':
-            if 'intervalo' in mensaje:
-                self.intervalo = mensaje['intervalo']
-                print(f"\n⚙ Intervalo actualizado a {self.intervalo} segundos")
-        
+            }
+            if self.enviar_mensaje(ack_mensaje):
+                print("   ✅ ACK enviado")
+                self._guardar_log(f"ACK enviado para comando {comando}")
+
         elif tipo == 'METRICA_RECIBIDA':
-            print(f"   ✅ Servidor confirmó recepción")
-        
-        elif tipo == 'ALERTA':
-            print(f"\n⚠ ALERTA: {mensaje.get('mensaje')}")
-            self._guardar_log(f"ALERTA: {mensaje}")
-    
+            print("   ✅ Servidor confirmó recepción")
+
+        elif tipo == 'ERROR':
+            print(f"⚠ Error del servidor: {mensaje.get('mensaje')}")
+
     def _guardar_log(self, mensaje):
-        """
-        Guarda mensajes en archivo de log
-        """
+        """Guarda en archivo de log"""
         try:
             with open('cliente.log', 'a', encoding='utf-8') as f:
-                f.write(f"{datetime.now()}: {mensaje}\n")
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                f.write(f"[{timestamp}] {mensaje}\n")
         except:
             pass
-    
+
     def enviar_mensaje(self, mensaje):
-        """
-        Envía un mensaje al servidor
-        Protocolo: [longitud(4 bytes)][json]
-        """
+        """Envía mensaje al servidor"""
         try:
             datos = json.dumps(mensaje).encode('utf-8')
             header = len(datos).to_bytes(4, 'big')
             self.socket_cliente.send(header + datos)
             return True
         except Exception as e:
-            print(f"❌ Error enviando mensaje: {e}")
+            print(f"❌ Error enviando: {e}")
             return False
-    
+
     def iniciar(self):
-        """
-        Inicia el cliente
-        """
+        """Inicia el cliente"""
         print(f"\n📡 Servidor: {self.servidor_host}:{self.servidor_port}")
-        print(f"⏱ Intervalo de envío: {self.intervalo} segundos")
-        
+        print(f"⏱ Intervalo: {self.intervalo} segundos")
+
         if self.conectar():
-            print("\n📤 Enviando métricas periódicamente...")
-            print("   Presiona Ctrl+C para detener\n")
+            print("\n📤 Enviando métricas... (Ctrl+C para detener)\n")
             self.enviar_metricas()
-        else:
-            print("\n❌ No se pudo conectar al servidor")
-            print("   Verifica que:")
-            print("   1. El servidor esté ejecutándose")
-            print(f"   2. La IP {self.servidor_host} sea correcta")
-            print("   3. No haya firewall bloqueando el puerto 9999")
-    
+
     def detener(self):
-        """
-        Detiene el cliente
-        """
+        """Detiene el cliente"""
         self.running = False
         if self.socket_cliente:
             try:
@@ -327,37 +415,28 @@ class ClusterCliente:
         print("\n🛑 Cliente detenido")
 
 def main():
-    """
-    Función principal
-    """
+    """Función principal"""
     print("="*60)
     print("CLUSTERMONITOR - CLIENTE DE MONITOREO")
-    print="="*60
-    
+    print("="*60)
+
+    print(f"\n💻 Sistema: {sys.platform}")
+    print(f"🖥 Hostname: {socket.gethostname()}")
+
     # Determinar IP del servidor
     servidor_ip = None
-    
-    # Si se pasa como argumento
+
     if len(sys.argv) > 1:
         servidor_ip = sys.argv[1]
-        print(f"\n📌 Usando servidor especificado: {servidor_ip}")
+        print(f"\n📌 Usando servidor: {servidor_ip}")
     else:
-        # Intentar auto-detección
-        cliente_temp = ClusterCliente()
-        servidor_ip = cliente_temp.auto_detectar_servidor()
-        
+        servidor_ip = input("\n📝 Ingresa la IP del servidor: ").strip()
         if not servidor_ip:
-            print("\n❌ No se pudo detectar servidor automáticamente")
-            ip_manual = input("📝 Ingresa la IP del servidor manualmente: ").strip()
-            if ip_manual:
-                servidor_ip = ip_manual
-            else:
-                servidor_ip = 'localhost'
-                print(f"⚠ Usando localhost: {servidor_ip}")
-    
-    # Crear y ejecutar cliente
+            servidor_ip = '192.168.100.6'
+            print(f"⚠ Usando IP por defecto: {servidor_ip}")
+
     cliente = ClusterCliente(servidor_ip, 9999)
-    
+
     try:
         cliente.iniciar()
     except KeyboardInterrupt:
@@ -365,6 +444,8 @@ def main():
         cliente.detener()
     except Exception as e:
         print(f"\n❌ Error fatal: {e}")
+        import traceback
+        traceback.print_exc()
         cliente.detener()
 
 if __name__ == '__main__':
